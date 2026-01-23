@@ -1,0 +1,50 @@
+name: CI and Cross-Repo Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'Dockerfile'
+
+jobs:
+  build-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. 登入 Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # 2. Build Image 並推送到 Docker Hub
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # 這裡會產生像 yourname/my-app:6f2d3a1 這樣的 Tag
+          tags: ${{ secrets.DOCKER_USERNAME }}/my-gitops-app:${{ github.sha }}
+
+      # 3. 跨 Repo 修改 Ops 倉庫
+      - name: Update Ops Manifest
+        run: |
+          # 設定 Git 使用 Token Clone 對面的 Repo
+          # 注意：將 <你的帳號> 換成你的 GitHub ID
+          git clone https://x-access-token:${{ secrets.OPS_REPO_TOKEN }}@github.com/${{ github.repository_owner }}/my-app-ops.git
+          cd my-app-ops
+          
+          # 修改 deployment.yaml 裡的 Image
+          # 我們用 sed 取代掉舊的 image 標籤
+          sed -i "s|image: .*|image: ${{ secrets.DOCKER_USERNAME }}/my-gitops-app:${{ github.sha }}|g" manifests/deployment.yaml
+          
+          # 推回 Ops Repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "deploy: update image to ${{ github.sha }} from app repo"
+          git push
